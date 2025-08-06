@@ -1,0 +1,180 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+local char = player.Character or player.CharacterAdded:Wait()
+local humanoid = char:WaitForChild("Humanoid")
+local root = char:WaitForChild("HumanoidRootPart")
+
+local MAX_SCAN_ANGLE = 360
+local SCAN_STEP_DEGREES = 15
+local CHECK_DISTANCE = 20
+local MOVE_RADIUS_MIN = 5
+local MOVE_RADIUS_MAX = 15
+local MOVE_DELAY = 2
+local STUCK_DISTANCE_THRESHOLD = 1
+
+local lastDirection = Vector3.new(1, 0, 0)
+local lastPosition = root.Position
+
+local wandering = true
+local controllingUser = "CanadianRoyalist"
+local followTarget = nil
+local danceCooldown = 0
+
+-- Try to get SayMessageRequest safely
+local chatEvent
+pcall(function()
+	chatEvent = ReplicatedStorage:FindFirstChild("DefaultChatSystemChatEvents")
+	if chatEvent then
+		chatEvent = chatEvent:FindFirstChild("SayMessageRequest")
+	end
+end)
+
+local function say(message)
+	if chatEvent then
+		chatEvent:FireServer(message, "All")
+	end
+end
+
+local function getClearDistance(direction)
+	local origin = root.Position + Vector3.new(0, 2, 0)
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterDescendantsInstances = {char}
+	raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+	local result = workspace:Raycast(origin, direction * CHECK_DISTANCE, raycastParams)
+	if result then
+		return (result.Position - origin).Magnitude
+	else
+		return CHECK_DISTANCE
+	end
+end
+
+local function getCandidateDirections()
+	local candidates = {}
+	for angle = 0, MAX_SCAN_ANGLE - SCAN_STEP_DEGREES, SCAN_STEP_DEGREES do
+		local rad = math.rad(angle + math.random(-5, 5)) -- slight randomness
+		local dir = Vector3.new(math.cos(rad), 0, math.sin(rad)).Unit
+		local dist = getClearDistance(dir)
+		if dist > 8 then -- only allow directions with open space
+			table.insert(candidates, { dir = dir, dist = dist })
+		end
+	end
+	return candidates
+end
+
+local function pickDirection(candidates)
+	if #candidates == 0 then
+		return Vector3.new(math.cos(math.random()*2*math.pi),0,math.sin(math.random()*2*math.pi))
+	end
+	table.sort(candidates, function(a, b) return a.dist > b.dist end)
+	if math.random() < 0.75 then
+		return candidates[1].dir
+	else
+		return candidates[math.random(1, math.min(5, #candidates))].dir
+	end
+end
+
+local function isStuck()
+	local moved = (root.Position - lastPosition).Magnitude
+	lastPosition = root.Position
+	return moved < STUCK_DISTANCE_THRESHOLD
+end
+
+local function smartMoveTo(direction)
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterDescendantsInstances = {char}
+	raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+
+	local origin = root.Position + Vector3.new(0, 2, 0)
+	local ray = workspace:Raycast(origin, direction * MOVE_RADIUS_MAX, raycastParams)
+	local finalDist = ray and (ray.Position - origin).Magnitude or MOVE_RADIUS_MAX
+	local dist = math.clamp(finalDist - 2, MOVE_RADIUS_MIN, MOVE_RADIUS_MAX)
+	local dest = root.Position + direction * dist
+
+	humanoid:MoveTo(dest)
+end
+
+local function wanderStep()
+	if math.random() < 0.2 then
+		local nearbyPlayers = {}
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+				table.insert(nearbyPlayers, p)
+			end
+		end
+		if #nearbyPlayers > 0 then
+			local chosen = nearbyPlayers[math.random(1, #nearbyPlayers)]
+			if chosen.Character then
+				followTarget = chosen
+			end
+		end
+	end
+
+	if followTarget and followTarget.Character and followTarget.Character:FindFirstChild("HumanoidRootPart") then
+		local dest = followTarget.Character.HumanoidRootPart.Position + Vector3.new(math.random(-5,5),0,math.random(-5,5))
+		humanoid:MoveTo(dest)
+	else
+		local dir = nil
+		if isStuck() then
+			dir = Vector3.new(math.cos(math.random() * 2 * math.pi), 0, math.sin(math.random() * 2 * math.pi))
+		else
+			local candidates = getCandidateDirections()
+			dir = pickDirection(candidates)
+		end
+		lastDirection = dir
+		smartMoveTo(dir)
+	end
+end
+
+RunService.Heartbeat:Connect(function()
+	if not wandering then return end
+	if danceCooldown <= 0 and math.random() < 0.15 then
+		say("/e dance")
+		danceCooldown = 5 + math.random(1, 5)
+	end
+	danceCooldown -= RunService.Heartbeat:Wait()
+end)
+
+spawn(function()
+	while true do
+		if wandering then
+			wanderStep()
+			humanoid.MoveToFinished:Wait()
+			task.wait(MOVE_DELAY)
+		else
+			task.wait(1)
+		end
+	end
+end)
+
+-- Listen to specific player chat
+local function setupChattedListener()
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p.Name == controllingUser then
+			p.Chatted:Connect(function(msg)
+				msg = msg:lower()
+				if msg:find(".startwander") then
+					wandering = true
+				elseif msg:find(".stopwander") then
+					wandering = false
+				end
+			end)
+		end
+	end
+end
+
+setupChattedListener()
+Players.PlayerAdded:Connect(function(p)
+	if p.Name == controllingUser then
+		p.Chatted:Connect(function(msg)
+			msg = msg:lower()
+			if msg:find(".startwander") then
+				wandering = true
+			elseif msg:find(".stopwander") then
+				wandering = false
+			end
+		end)
+	end
+end)
