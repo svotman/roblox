@@ -1,0 +1,131 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+local char = player.Character or player.CharacterAdded:Wait()
+local humanoid = char:WaitForChild("Humanoid")
+local root = char:WaitForChild("HumanoidRootPart")
+
+local MAX_SCAN_ANGLE = 360
+local SCAN_STEP_DEGREES = 15
+local CHECK_DISTANCE = 20
+local MOVE_RADIUS_MIN = 5
+local MOVE_RADIUS_MAX = 15
+local MOVE_DELAY = 2
+local STUCK_DISTANCE_THRESHOLD = 1
+
+local lastDirection = Vector3.new(1, 0, 0) -- start moving along X axis
+local lastPosition = root.Position
+
+local wandering = true
+local controllingUser = "CanadianRoyalist"
+local danceCooldown = 0
+
+-- Try to get SayMessageRequest safely
+local chatEvent
+pcall(function()
+	chatEvent = ReplicatedStorage:FindFirstChild("DefaultChatSystemChatEvents")
+	if chatEvent then
+		chatEvent = chatEvent:FindFirstChild("SayMessageRequest")
+	end
+end)
+
+local function say(message)
+	if chatEvent then
+		chatEvent:FireServer(message, "All")
+	end
+end
+
+local function getClearDistance(direction)
+	local origin = root.Position + Vector3.new(0, 2, 0)
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterDescendantsInstances = {char}
+	raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+
+	local raycastResult = workspace:Raycast(origin, direction * CHECK_DISTANCE, raycastParams)
+	if raycastResult then
+		return (raycastResult.Position - origin).Magnitude
+	else
+		return CHECK_DISTANCE
+	end
+end
+
+local function getCandidateDirections()
+	local candidates = {}
+	for angleDeg = 0, MAX_SCAN_ANGLE - SCAN_STEP_DEGREES, SCAN_STEP_DEGREES do
+		local radians = math.rad(angleDeg)
+		local dir = Vector3.new(math.cos(radians), 0, math.sin(radians))
+		local dist = getClearDistance(dir)
+		table.insert(candidates, {dir=dir, dist=dist})
+	end
+	return candidates
+end
+
+local function pickDirection(candidates)
+	-- Sort candidates by distance descending
+	table.sort(candidates, function(a,b) return a.dist > b.dist end)
+
+	-- Bias: 70% chance pick best, 30% pick random among top 4
+	if math.random() < 0.7 then
+		return candidates[1].dir
+	else
+		local topN = math.min(4, #candidates)
+		local choice = candidates[math.random(1, topN)].dir
+		return choice
+	end
+end
+
+local function isStuck()
+	local movedDist = (root.Position - lastPosition).Magnitude
+	lastPosition = root.Position
+	return movedDist < STUCK_DISTANCE_THRESHOLD
+end
+
+-- Main wandering loop (from first script)
+spawn(function()
+	while true do
+		if wandering then
+			if isStuck() then
+				-- Bounce back: pick a random new direction if stuck
+				lastDirection = Vector3.new(math.cos(math.random()*2*math.pi),0,math.sin(math.random()*2*math.pi))
+			else
+				local candidates = getCandidateDirections()
+				lastDirection = pickDirection(candidates)
+			end
+
+			local moveDist = math.random(MOVE_RADIUS_MIN, MOVE_RADIUS_MAX)
+			local destination = root.Position + lastDirection * moveDist
+
+			humanoid:MoveTo(destination)
+			humanoid.MoveToFinished:Wait()
+			task.wait(MOVE_DELAY)
+		else
+			task.wait(1)
+		end
+	end
+end)
+
+-- Dance logic from second script
+RunService.Heartbeat:Connect(function(deltaTime)
+	if not wandering then return end
+	if danceCooldown <= 0 and math.random() < 0.15 then
+		say("/e dance")
+		danceCooldown = 5 + math.random(1, 5)
+	end
+	danceCooldown = danceCooldown - deltaTime
+end)
+
+-- Chat listener (second script) for .startwander / .stopwander commands
+local TextChatService = game:GetService("TextChatService")
+
+TextChatService.OnIncomingMessage = function(message)
+	if message.TextSource and message.TextSource.Name == controllingUser then
+		local msg = message.Text:lower()
+		if msg:find(".startwander") then
+			wandering = true
+		elseif msg:find(".stopwander") then
+			wandering = false
+		end
+	end
+end
