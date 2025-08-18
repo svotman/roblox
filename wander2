@@ -19,7 +19,7 @@ local lastDirection = Vector3.new(1, 0, 0) -- start moving along X axis
 local lastPosition = root.Position
 
 local wandering = true
-local controllingUser = "UnitedEmpireLoyalist"
+local controllingUser = "7607967O342352336346"
 local danceCooldown = 0
 
 -- Try to get SayMessageRequest safely
